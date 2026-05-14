@@ -699,6 +699,34 @@
             { id: 'p3', name: 'Aktien', color: '#f59e0b' }
         ];
 
+        // Symbol mapping for common German/European ETFs (WKN/ISIN -> Yahoo Ticker)
+        const symbolMapping = {
+            // iShares Core DAX
+            'DBX1SC': 'EXS1.DE',
+            'EXS1': 'EXS1.DE',
+            // iShares Core MSCI World
+            'A0RPWH': 'IWDA.AS',
+            'IWDA': 'IWDA.AS',
+            'EUNL': 'IWDA.AS',
+            // iShares Core S&P 500
+            'A0YEDG': 'CSSPX.MI',
+            'CSPX': 'CSPX.L',
+            'CSSPX': 'CSSPX.MI',
+            // Vanguard FTSE All-World
+            'A1JX52': 'VWRL.L',
+            'VWCE': 'VWCE.DE',
+            'VWRL': 'VWRL.L',
+            // iShares Nasdaq 100
+            'A0YEDR': 'SXRV.DE',
+            'EXXT': 'EXXT.DE',
+            // iShares Core STOXX Europe 600
+            'A0LGQD': 'EXSA.DE',
+            'EXSA': 'EXSA.DE',
+            // Xtrackers MSCI World
+            'A1XB5U': 'XDWD.MI',
+            'XDWD': 'XDWD.MI',
+        };
+
         // CoinGecko symbol -> id mapping (common coins)
         const coinGeckoMap = {
             'BTC': 'bitcoin',
@@ -722,6 +750,11 @@
             'SUI': 'sui',
             'APT': 'aptos'
         };
+
+        function resolveYahooSymbol(symbol) {
+            const upper = symbol.toUpperCase().trim();
+            return symbolMapping[upper] || upper;
+        }
 
         let data = {
             portfolios: [...defaultPortfolios],
@@ -844,7 +877,7 @@
             }
         }
 
-        // Fetch stock/ETF prices via CORS proxy
+        // Fetch stock/ETF prices via CORS proxy with symbol mapping
         async function fetchStockPrices() {
             const stockAssets = data.assets.filter(a => a.type === 'stock' || a.type === 'etf');
             if (stockAssets.length === 0) return;
@@ -856,28 +889,44 @@
             
             for (const asset of stockAssets) {
                 try {
-                    const symbol = asset.symbol.toUpperCase();
+                    const symbol = resolveYahooSymbol(asset.symbol);
                     const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1d`;
                     const proxyUrl = proxyBase + encodeURIComponent(yahooUrl);
                     
-                    const response = await fetch(proxyUrl, { signal: AbortSignal.timeout(8000) });
+                    const response = await fetch(proxyUrl, { signal: AbortSignal.timeout(10000) });
                     if (!response.ok) continue;
                     
                     const yfData = await response.json();
+                    
+                    // Check for Yahoo error
+                    if (yfData.chart && yfData.chart.error) {
+                        console.warn(`Yahoo error for ${asset.symbol} (${symbol}):`, yfData.chart.error);
+                        continue;
+                    }
+                    
                     if (yfData.chart && yfData.chart.result && yfData.chart.result[0]) {
                         const result = yfData.chart.result[0];
                         const meta = result.meta;
-                        const price = meta.regularMarketPrice || meta.previousClose || meta.chartPreviousClose;
+                        
+                        // Try multiple price fields in order of preference
+                        const price = meta.regularMarketPrice 
+                                   || meta.previousClose 
+                                   || meta.chartPreviousClose
+                                   || (result.indicators?.quote?.[0]?.close?.slice(-1)[0]);
+                                   
                         if (price) {
                             asset.currentPrice = price;
                             asset.lastUpdated = new Date().toISOString();
+                            console.log(`✅ ${asset.symbol} (${symbol}): ${price} ${meta.currency || 'USD'}`);
+                        } else {
+                            console.warn(`⚠️ No price found for ${asset.symbol} (${symbol})`);
                         }
                     }
                 } catch (e) {
-                    console.warn(`Failed to fetch ${asset.symbol}:`, e.message);
+                    console.warn(`❌ Failed to fetch ${asset.symbol}:`, e.message);
                 }
                 
-                await new Promise(r => setTimeout(r, 300));
+                await new Promise(r => setTimeout(r, 400));
             }
             
             saveData();
